@@ -420,7 +420,7 @@ async def cancel_all_tasks(_, message: Message):
     await message.reply(f"**Cancelled {cancelled} running task(s).**")
 
 if __name__ == "__main__":
-    LOGGER(__name__).info("Bot Started")
+    LOGGER(__name__).info("Bot Started!")
     try:
         compose([bot, user])
     except KeyboardInterrupt:
@@ -428,4 +428,4 @@ if __name__ == "__main__":
     except Exception as e:
         LOGGER(__name__).error(f"Bot Crashed: {e}")
     finally:
-        LOGGER(__name__).info("Bot Stopped")
+        LOGGER(__name__).info("Bot Stopped.")

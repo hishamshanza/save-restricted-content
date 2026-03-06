@@ -4,7 +4,6 @@ from time import time
 from asyncio.subprocess import PIPE
 from asyncio import create_subprocess_exec, create_subprocess_shell, wait_for
 
-from pyleaves import Leaves
 from pyrogram.types import (
     InputMediaPhoto,
     InputMediaVideo,
@@ -27,11 +26,54 @@ from helpers.msg import (
 )
 from logger import LOGGER
 
-PROGRESS_BAR = """
-Percentage: {percentage:.2f}% | {current}/{total}
-Speed: {speed}/s
-Estimated Time Left: {est_time}
-"""
+async def custom_progress(current, total, action, progress_message, start_time, file_name, state_dict):
+    if total == 0:
+        return
+
+    current_time = time()
+    
+    if (current_time - state_dict.get('last_update', 0)) < 5 and current != total:
+        return
+        
+    state_dict['last_update'] = current_time
+
+    percentage = (current / total) * 100
+    filled = int(percentage / 10)
+    bar = "■" * filled + "□" * (10 - filled)
+    
+    elapsed_time = current_time - start_time
+    speed = current / elapsed_time if elapsed_time > 0 else 0
+    eta = (total - current) / speed if speed > 0 else 0
+
+    def format_bytes(size):
+        if not size: return "0B"
+        for unit in ["B", "KB", "MB", "GB"]:
+            if size < 1024: return f"{size:.2f} {unit}"
+            size /= 1024
+        return "File too large"
+        
+    def format_time(seconds):
+        m, s = divmod(int(seconds), 60)
+        h, m = divmod(m, 60)
+        if h: return f"{h}h {m}m {s}s"
+        elif m: return f"{m}m {s}s"
+        return f"{s}s"
+
+    clean_filename = file_name.replace(".", ".\u200b") if file_name else "Unknown"
+
+    text = (
+        f"{action}\n"
+        f"File: {clean_filename}\n\n"
+        f"{bar}\n"
+        f"Percentage: {percentage:.2f}% | {format_bytes(current)}/{format_bytes(total)}\n"
+        f"Speed: {format_bytes(speed)}/s\n"
+        f"Estimated Time Left: {format_time(eta)}"
+    )
+    
+    try:
+        await progress_message.edit_text(text)
+    except Exception:
+        pass
 
 async def cmd_exec(cmd, shell=False):
     if shell:
@@ -128,12 +170,6 @@ async def get_video_thumbnail(video_file, duration):
         return None
     return output
 
-def progressArgs(action: str, progress_message, start_time, filename: str = None):
-    if filename:
-        clean_filename = filename.replace(".", ".\u200b") 
-        action = f"{action}\nFile: {clean_filename}"
-    return (action, progress_message, start_time, PROGRESS_BAR, "■", "□")
-
 async def send_media(
     bot, message, media_path, media_type, caption, progress_message, start_time
 ):
@@ -148,7 +184,9 @@ async def send_media(
 
     filename = os.path.basename(media_path)
     LOGGER(__name__).info(f"Uploading media: {filename}")
-    progress_args = progressArgs("📥 Uploading", progress_message, start_time, filename)
+    
+    state_dict = {'last_update': 0}
+    prog_args = ("📥 Uploading", progress_message, start_time, filename, state_dict)
 
     async def _send_once():
         if media_type == "photo":
@@ -156,8 +194,8 @@ async def send_media(
                 chat_id=message.chat.id,
                 photo=media_path,
                 caption=caption or "",
-                progress=Leaves.progress_for_pyrogram,
-                progress_args=progress_args,
+                progress=custom_progress,
+                progress_args=prog_args,
             )
         elif media_type == "video":
             duration, _, _, width, height = await get_media_info(media_path)
@@ -173,8 +211,8 @@ async def send_media(
                 thumb=thumb,
                 caption=caption or "",
                 supports_streaming=True,
-                progress=Leaves.progress_for_pyrogram,
-                progress_args=progress_args,
+                progress=custom_progress,
+                progress_args=prog_args,
             )
         elif media_type == "audio":
             duration, artist, title, _, _ = await get_media_info(media_path)
@@ -185,16 +223,16 @@ async def send_media(
                 performer=artist,
                 title=title,
                 caption=caption or "",
-                progress=Leaves.progress_for_pyrogram,
-                progress_args=progress_args,
+                progress=custom_progress,
+                progress_args=prog_args,
             )
         elif media_type == "document":
             await bot.send_document(
                 chat_id=message.chat.id,
                 document=media_path,
                 caption=caption or "",
-                progress=Leaves.progress_for_pyrogram,
-                progress_args=progress_args,
+                progress=custom_progress,
+                progress_args=prog_args,
             )
 
     max_retries = 3
@@ -252,15 +290,16 @@ async def download_single_media(msg, progress_message, start_time, semaphore):
     max_retries = 3
     retry_count = 1
 
+    state_dict = {'last_update': 0}
+    prog_args = ("📥 Downloading", progress_message, start_time, filename, state_dict)
+
     while retry_count <= max_retries:
         try:
             async with semaphore:
                 media_path = await msg.download(
                     file_name=download_path,
-                    progress=Leaves.progress_for_pyrogram,
-                    progress_args=progressArgs(
-                        "📥 Downloading", progress_message, start_time, filename
-                    ),
+                    progress=custom_progress,
+                    progress_args=prog_args,
                 )
 
             parsed_caption = await get_parsed_msg(

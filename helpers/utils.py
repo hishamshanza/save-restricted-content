@@ -38,8 +38,6 @@ async def custom_progress(current, total, action, progress_message, start_time, 
     state_dict['last_update'] = current_time
 
     percentage = (current / total) * 100
-    filled = int(percentage / 15)
-    bar = "■" * filled + "□" * (15 - filled)
     
     elapsed_time = current_time - start_time
     speed = current / elapsed_time if elapsed_time > 0 else 0
@@ -64,7 +62,6 @@ async def custom_progress(current, total, action, progress_message, start_time, 
     text = (
         f"{action}\n"
         f"File: {clean_filename}\n\n"
-        f"{bar}\n"
         f"Percentage: {percentage:.2f}% | {format_bytes(current)}/{format_bytes(total)}\n"
         f"Speed: {format_bytes(speed)}/s\n"
         f"Estimated Time Left: {format_time(eta)}"
@@ -186,7 +183,7 @@ async def send_media(
     LOGGER(__name__).info(f"Uploading media: {filename}")
     
     state_dict = {'last_update': 0}
-    prog_args = ("📥 Uploading", progress_message, start_time, filename, state_dict)
+    prog_args = ("📤 Uploading", progress_message, start_time, filename, state_dict)
 
     async def _send_once():
         if media_type == "photo":

@@ -129,7 +129,6 @@ async def handle_download(bot: Client, message: Message, post_url: str, pre_fetc
         else:
             chat_id, message_id = getChatMsgID(post_url)
             chat_message = await user.get_messages(chat_id=chat_id, message_ids=message_id)
-        LOGGER(__name__).info(f"Downloading URL: {post_url}")
 
         if not chat_message or chat_message.empty:
              await message.reply("**❌ Message not found or inaccessible.**")
@@ -168,6 +167,16 @@ async def handle_download(bot: Client, message: Message, post_url: str, pre_fetc
 
             filename = get_file_name(message_id, chat_message)
             download_path = get_download_path(message_id, filename)
+
+            media_obj = (
+                chat_message.document or chat_message.video or 
+                chat_message.audio or chat_message.photo or 
+                chat_message.animation or chat_message.voice or 
+                chat_message.video_note
+            )
+            pre_file_size = getattr(media_obj, "file_size", 0) if media_obj else 0
+            
+            LOGGER(__name__).info(f"Downloading media: {filename} (Size: {format_size(pre_file_size)})")
 
             async with dl_sem:
                 await progress_message.edit(f"**📥 Downloading:** {filename}")
@@ -212,8 +221,6 @@ async def handle_download(bot: Client, message: Message, post_url: str, pre_fetc
                 await progress_message.edit("**❌ Download failed: File is empty**")
                 return
 
-            LOGGER(__name__).info(f"Downloaded media: {os.path.basename(media_path)} (Size: {format_size(file_size)})")
-            
             await progress_message.edit("**⏳ Waiting for Upload...**")
 
             media_type = (
@@ -239,6 +246,7 @@ async def handle_download(bot: Client, message: Message, post_url: str, pre_fetc
 
             if upload_success:
                 await progress_message.delete()
+                LOGGER(__name__).info(f"Finished Processing: {post_url}")
 
         elif chat_message.text or chat_message.caption:
             await message.reply(parsed_text or parsed_caption)

@@ -13,8 +13,6 @@ def get_download_path(folder_id: int, filename: str, root_dir: str = "downloads"
 
 def cleanup_download(path: str) -> None:
     try:
-        LOGGER(__name__).info(f"Cleaning Download: {os.path.basename(path)}")
-        
         if os.path.exists(path):
             os.remove(path)
         if os.path.exists(path + ".temp"):

@@ -180,8 +180,12 @@ async def send_media(
         return False
 
     filename = os.path.basename(media_path)
-    LOGGER(__name__).info(f"Uploading media: {filename}")
     
+    try:
+        await progress_message.edit(f"**📤 Uploading:** {filename}")
+    except Exception:
+        pass
+
     state_dict = {'last_update': 0}
     prog_args = ("📤 Uploading", progress_message, start_time, filename, state_dict)
 

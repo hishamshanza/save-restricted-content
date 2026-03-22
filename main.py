@@ -199,6 +199,25 @@ async def handle_download(bot: Client, message: Message, post_url: str, pre_fetc
                             progress=custom_progress,
                             progress_args=prog_args,
                         )
+                        
+                        if media_path and os.path.exists(media_path):
+                            actual_size = os.path.getsize(media_path)
+
+                            if pre_file_size > 0 and actual_size < pre_file_size:
+                                LOGGER(__name__).warning(f"Incomplete download for {filename} ({actual_size}/{pre_file_size} bytes). Refetching message...")
+                                
+                                os.remove(media_path)
+                                media_path = None
+                                
+                                try:
+                                    chat_id, msg_id = getChatMsgID(post_url)
+                                    chat_message = await user.get_messages(chat_id=chat_id, message_ids=msg_id)
+                                except Exception as refetch_err:
+                                    LOGGER(__name__).error(f"Failed to refetch message for {filename}: {refetch_err}")
+                                
+                                retry_count += 1
+                                continue
+
                         break
                     except FloodWait as e:
                         wait_s = int(getattr(e, "value", 0) or 0)

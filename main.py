@@ -101,9 +101,9 @@ async def help_command(_, message: Message):
         "➤ **Download Media**\n"
         "   – Send `/dl <post_URL>` **or** just paste a Telegram post link to fetch photos, videos, audio, or documents.\n\n"
         "➤ **Batch Download**\n"
-        "   – Send `/batch start_link end_link` to grab a series of posts in one go.\n"
-        "     💡 Example: `/batch https://t.me/mychannel/100 https://t.me/mychannel/120`\n"
-        "**It will download all posts from ID 100 to 120.**\n\n"
+        "   – Send `/batch start_link end_link [filter]` to grab a series of posts in one go.\n"
+        "     💡 Example: `/batch https://t.me/mychannel/100 https://t.me/mychannel/120 video`\n"
+        "   – Filters available: video, doc, photo, audio (leave empty for all)\n\n"
         "➤ **Requirements**\n"
         "   – Make sure the user client is part of the chat.\n\n"
         "➤ **If the bot hangs**\n"
@@ -170,8 +170,7 @@ async def handle_download(bot: Client, message: Message, post_url: str, pre_fetc
 
         elif has_downloadable_media:
             start_time = time()
-            progress_message = await message.reply("**⏳ Queueing Download...**")
-
+            
             filename = get_file_name(message_id, chat_message)
             download_path = get_download_path(message_id, filename)
 
@@ -186,7 +185,7 @@ async def handle_download(bot: Client, message: Message, post_url: str, pre_fetc
             LOGGER(__name__).info(f"Downloading media: {filename} (Size: {format_size(pre_file_size)})")
 
             async with dl_sem:
-                await progress_message.edit(f"**📥 Downloading:** {filename}")
+                progress_message = await message.reply(f"**📥 Downloading:** {filename}")
                 
                 max_retries = 3
                 retry_count = 1
@@ -228,8 +227,6 @@ async def handle_download(bot: Client, message: Message, post_url: str, pre_fetc
                 await progress_message.edit("**❌ Download failed: File is empty**")
                 return
             
-            await progress_message.edit("**⏳ Waiting for Upload...**")
-
             media_type = (
                 "photo"
                 if chat_message.photo
@@ -294,14 +291,18 @@ async def download_media(bot: Client, message: Message):
 async def download_range(bot: Client, message: Message):
     args = message.text.split()
 
-    if len(args) != 3 or not all(arg.startswith("https://t.me/") for arg in args[1:]):
+    if len(args) < 3 or not all(arg.startswith("https://t.me/") for arg in args[1:3]):
         await message.reply(
             "🚀 **Batch Download Process**\n"
-            "`/batch start_link end_link`\n\n"
-            "💡 **Example:**\n"
-            "`/batch https://t.me/mychannel/100 https://t.me/mychannel/120`"
+            "`/batch start_link end_link [filter]`\n\n"
+            "💡 **Examples:**\n"
+            "`/batch https://t.me/mychannel/100 https://t.me/mychannel/120` (All)\n"
+            "`/batch https://t.me/mychannel/100 https://t.me/mychannel/120 video` (Only Videos)\n"
+            "`/batch https://t.me/mychannel/100 https://t.me/mychannel/120 doc` (Only Documents)"
         )
         return
+
+    filter_type = args[3].lower() if len(args) > 3 else "all"
 
     try:
         start_chat, start_id = getChatMsgID(args[1])
@@ -325,16 +326,29 @@ async def download_range(bot: Client, message: Message):
     downloaded = skipped = failed = 0
     batch_tasks = []
     BATCH_SIZE = PyroConf.BATCH_SIZE
-    
     processed_media_groups = set()
+    
+    all_ids = list(range(start_id, end_id + 1))
+    chunk_size = 200
 
-    for msg_id in range(start_id, end_id + 1):
-        url = f"{prefix}/{msg_id}"
+    for i in range(0, len(all_ids), chunk_size):
+        chunk_ids = all_ids[i:i + chunk_size]
         try:
-            chat_msg = await user.get_messages(chat_id=start_chat, message_ids=msg_id)
-            if not chat_msg:
+            messages = await user.get_messages(chat_id=start_chat, message_ids=chunk_ids)
+            if not isinstance(messages, list):
+                messages = [messages]
+        except Exception as e:
+            LOGGER(__name__).error(f"Error fetching chunk: {e}")
+            failed += len(chunk_ids)
+            continue
+            
+        for chat_msg in messages:
+            if not chat_msg or chat_msg.empty:
                 skipped += 1
                 continue
+            
+            msg_id = chat_msg.id
+            url = f"{prefix}/{msg_id}"
             
             if chat_msg.media_group_id:
                 if chat_msg.media_group_id in processed_media_groups:
@@ -347,6 +361,20 @@ async def download_range(bot: Client, message: Message):
             if not (has_media or has_text):
                 skipped += 1
                 continue
+                
+            if filter_type != "all":
+                if filter_type == "video" and not chat_msg.video:
+                    skipped += 1
+                    continue
+                elif filter_type == "doc" and not chat_msg.document:
+                    skipped += 1
+                    continue
+                elif filter_type == "audio" and not chat_msg.audio:
+                    skipped += 1
+                    continue
+                elif filter_type == "photo" and not chat_msg.photo:
+                    skipped += 1
+                    continue
 
             task = track_task(handle_download(bot, message, url, pre_fetched_msg=chat_msg))
             batch_tasks.append(task)
@@ -368,10 +396,6 @@ async def download_range(bot: Client, message: Message):
                 batch_tasks.clear()
                 await asyncio.sleep(PyroConf.FLOOD_WAIT_DELAY)
 
-        except Exception as e:
-            failed += 1
-            LOGGER(__name__).error(f"Error at {url}: {e}")
-
     if batch_tasks:
         results = await asyncio.gather(*batch_tasks, return_exceptions=True)
         for result in results:
@@ -385,7 +409,7 @@ async def download_range(bot: Client, message: Message):
         "**✅ Batch Process Complete!**\n"
         "━━━━━━━━━━━━━━━━━━━\n"
         f"📥 **Downloaded** : `{downloaded}` post(s)\n"
-        f"⏭️ **Skipped** : `{skipped}` (no content)\n"
+        f"⏭️ **Skipped** : `{skipped}` (no content or filtered)\n"
         f"❌ **Failed** : `{failed}` error(s)"
     )
 

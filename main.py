@@ -84,10 +84,9 @@ def track_task(coro):
 @bot.on_message(filters.command("start") & filters.private)
 async def start(_, message: Message):
     welcome_text = (
-        "👋 **Welcome to Save Restricted Content Bot!**\n\n"
+        "🤖 **Welcome to Save Restricted Content Bot!**\n\n"
         "I can grab photos, videos, audio, and documents from any Telegram post.\n"
-        "Just send me a link (paste it directly or use `/dl <link>`),\n"
-        "or reply to a message with `/dl`.\n\n"
+        "Just send me a link (paste it directly or use `/dl <link>`),\n\n"
         "ℹ️ Use `/help` to view all commands and examples.\n"
         "🔒 Make sure the user client is part of the chat.\n\n"
         "Ready? Send me a Telegram post link!"
@@ -97,13 +96,13 @@ async def start(_, message: Message):
 @bot.on_message(filters.command("help") & filters.private)
 async def help_command(_, message: Message):
     help_text = (
-        "💡 **Save Restricted Content Bot Help**\n\n"
-        "➤ **Download Media**\n"
+        "💡 **Save Restricted Content Bot Help:**\n\n"
+        "➤ **Single Download**\n"
         "   – Send `/dl <post_URL>` **or** just paste a Telegram post link to fetch photos, videos, audio, or documents.\n\n"
         "➤ **Batch Download**\n"
         "   – Send `/batch start_link end_link [filter]` to grab a series of posts in one go.\n"
-        "     💡 Example: `/batch https://t.me/mychannel/100 https://t.me/mychannel/120 video`\n"
-        "   – Filters available: video, doc, photo, audio (leave empty for all)\n\n"
+        "   – Filters available: video, doc, photo, audio (leave empty for all).\n\n"
+        "  💡Example: `/batch https://t.me/mychannel/100 https://t.me/mychannel/120 video`\n"
         "➤ **Requirements**\n"
         "   – Make sure the user client is part of the chat.\n\n"
         "➤ **If the bot hangs**\n"
@@ -111,7 +110,7 @@ async def help_command(_, message: Message):
         "➤ **Logs**\n"
         "   – Send `/logs` to download the bot’s log file.\n\n"
         "➤ **Stats**\n"
-        "   – Send `/stats` to view current status:\n\n"
+        "   – Send `/stats` to view current status.\n\n"
     )
     await message.reply(help_text, disable_web_page_preview=True)
 
@@ -322,11 +321,11 @@ async def download_range(bot: Client, message: Message):
 
     if len(args) < 3 or not all(arg.startswith("https://t.me/") for arg in args[1:3]):
         await message.reply(
-            "🚀 **Batch Download Process**\n"
+            "🚀 **Batch Download**\n"
             "`/batch start_link end_link [filter]`\n\n"
             "💡 **Examples:**\n"
-            "`/batch https://t.me/mychannel/100 https://t.me/mychannel/120` (All)\n"
-            "`/batch https://t.me/mychannel/100 https://t.me/mychannel/120 video` (Only Videos)\n"
+            "`/batch https://t.me/mychannel/100 https://t.me/mychannel/120` (Left blank for All)\n\n"
+            "`/batch https://t.me/mychannel/100 https://t.me/mychannel/120 video` (Only Videos)\n\n"
             "`/batch https://t.me/mychannel/100 https://t.me/mychannel/120 doc` (Only Documents)"
         )
         return
@@ -435,7 +434,7 @@ async def download_range(bot: Client, message: Message):
 
     await loading.delete()
     await message.reply(
-        "**✅ Batch Process Complete!**\n"
+        "**✅ Batch Process Completed!**\n"
         "━━━━━━━━━━━━━━━━━━━\n"
         f"📥 **Downloaded** : `{downloaded}` post(s)\n"
         f"⏭️ **Skipped** : `{skipped}` (no content or filtered)\n"
@@ -462,14 +461,13 @@ async def stats(_, message: Message):
     process = psutil.Process(os.getpid())
 
     stats = (
-        "**≧◉◡◉≦ Bot is Up and Running successfully.**\n\n"
+        "**Bot's Live and Running Successfully.**\n\n"
         f"**➜ Bot Uptime:** `{currentTime}`\n"
+        f"**➜ Free Disk Space:** `{free}`\n"
         f"**➜ Total Disk Space:** `{total}`\n"
-        f"**➜ Used:** `{used}`\n"
-        f"**➜ Free:** `{free}`\n"
         f"**➜ Memory Usage:** `{round(process.memory_info()[0] / 1024**2)} MiB`\n\n"
-        f"**➜ Upload:** `{sent}`\n"
-        f"**➜ Download:** `{recv}`\n\n"
+        f"**➜ Uploaded:** `{sent}`\n"
+        f"**➜ Downloaded:** `{recv}`\n\n"
         f"**➜ CPU:** `{cpuUsage}%` | "
         f"**➜ RAM:** `{memory}%` | "
         f"**➜ DISK:** `{disk}%`"

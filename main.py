@@ -406,7 +406,7 @@ async def download_range(bot: Client, message: Message):
     prefix = args[1].rsplit("/", 1)[0]
     loading = await message.reply(f"📥 **Started Batch Processing...**")
     try:
-        await loading.pin(disable_notification=True)
+        await loading.pin(disable_notification=True, both_sides=True)
     except Exception:
         pass
 

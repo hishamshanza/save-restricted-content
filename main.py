@@ -12,8 +12,8 @@ from pyrogram.types import Message
 
 from helpers.utils import (
     processMediaGroup,
-    custom_progress,
-    send_media
+    send_media,
+    get_progress_text
 )
 
 from helpers.files import (
@@ -114,7 +114,7 @@ async def help_command(_, message: Message):
     )
     await message.reply(help_text, disable_web_page_preview=True)
 
-async def handle_download(bot: Client, message: Message, post_url: str, pre_fetched_msg: Message = None, fetch_time: float = None):
+async def handle_download(bot: Client, message: Message, post_url: str, pre_fetched_msg: Message = None, fetch_time: float = None, progress_msg: Message = None, batch_stats: dict = None):
     if "?" in post_url:
         post_url = post_url.split("?", 1)[0]
 
@@ -149,9 +149,6 @@ async def handle_download(bot: Client, message: Message, post_url: str, pre_fetc
         parsed_caption = await get_parsed_msg(
             chat_message.caption or "", chat_message.caption_entities
         )
-        parsed_text = await get_parsed_msg(
-            chat_message.text or "", chat_message.entities
-        )
 
         has_downloadable_media = (
             chat_message.document or chat_message.video or 
@@ -161,15 +158,31 @@ async def handle_download(bot: Client, message: Message, post_url: str, pre_fetc
         )
 
         if chat_message.media_group_id:
-            if not await processMediaGroup(chat_message, bot, message, dl_sem):
-                await message.reply(
-                    "**Could not extract any valid media from the media group.**"
-                )
+            if progress_msg and batch_stats:
+                batch_stats["processed"] += 1
+                try:
+                    await progress_msg.edit(get_progress_text("Media Group", batch_stats))
+                except Exception:
+                    pass
+            elif not progress_msg:
+                progress_msg = await message.reply(get_progress_text("Media Group"))
+
+            if not await processMediaGroup(chat_message, bot, message, dl_sem, progress_msg, batch_stats):
+                if progress_msg:
+                    try:
+                        await progress_msg.edit("❌ **Failed to process Media Group**")
+                        await asyncio.sleep(2)
+                    except Exception:
+                        pass
+            
+            if not batch_stats and progress_msg:
+                try:
+                    await progress_msg.delete()
+                except Exception:
+                    pass
             return
 
         elif has_downloadable_media:
-            start_time = time()
-            
             filename = get_file_name(message_id, chat_message)
             download_path = get_download_path(message_id, filename)
 
@@ -194,19 +207,22 @@ async def handle_download(bot: Client, message: Message, post_url: str, pre_fetc
                     except Exception as e:
                         LOGGER(__name__).warning(f"Failed to refresh stale reference for {filename}: {e}")
 
-                progress_message = await message.reply(f"**📥 Downloading:** {filename}")
+                if progress_msg and batch_stats:
+                    batch_stats["processed"] += 1
+                    try:
+                        await progress_msg.edit(get_progress_text(filename, batch_stats))
+                    except Exception:
+                        pass
+                elif not progress_msg:
+                    progress_msg = await message.reply(get_progress_text(filename))
                 
                 max_retries = 3
                 retry_count = 1
-                state_dict = {'last_update': 0}
-                prog_args = ("📥 Downloading", progress_message, start_time, filename, state_dict)
                 
                 while retry_count <= max_retries:
                     try:
                         media_path = await chat_message.download(
-                            file_name=download_path,
-                            progress=custom_progress,
-                            progress_args=prog_args,
+                            file_name=download_path
                         )
                         
                         if media_path and os.path.exists(media_path):
@@ -232,10 +248,11 @@ async def handle_download(bot: Client, message: Message, post_url: str, pre_fetc
                         wait_s = int(getattr(e, "value", 0) or 0)
                         wait_msg = get_readable_time(wait_s)
                         LOGGER(__name__).warning(f"FloodWait while downloading media: {wait_s}s")
-                        try:
-                            await progress_message.edit(f"⏳ **FloodWait:** Sleeping {wait_msg}...")
-                        except:
-                            pass
+                        if progress_msg:
+                            try:
+                                await progress_msg.edit(get_progress_text(filename, batch_stats, f"⏳ **Rate Limited:** Pausing for {wait_msg}..."))
+                            except Exception:
+                                pass
                         await asyncio.sleep(wait_s + 1)
                         continue 
                     except FileReferenceExpired:
@@ -257,12 +274,22 @@ async def handle_download(bot: Client, message: Message, post_url: str, pre_fetc
                         break
 
             if not media_path or not os.path.exists(media_path):
-                await progress_message.edit("**❌ Download failed: File not saved properly**")
+                if progress_msg:
+                    try:
+                        await progress_msg.edit(f"❌ **Failed to process {filename}**")
+                        await asyncio.sleep(2)
+                    except Exception:
+                        pass
                 return
 
             file_size = os.path.getsize(media_path)
             if file_size == 0:
-                await progress_message.edit("**❌ Download failed: File is empty**")
+                if progress_msg:
+                    try:
+                        await progress_msg.edit(f"❌ **Failed to process {filename}**")
+                        await asyncio.sleep(2)
+                    except Exception:
+                        pass
                 return
             
             media_type = (
@@ -282,15 +309,25 @@ async def handle_download(bot: Client, message: Message, post_url: str, pre_fetc
                     media_path,
                     media_type,
                     parsed_caption,
-                    progress_message,
-                    start_time,
+                    progress_msg,
+                    batch_stats
                 )
 
             if upload_success:
-                await progress_message.delete()
+                if not batch_stats and progress_msg:
+                    try:
+                        await progress_msg.delete()
+                    except Exception:
+                        pass
                 LOGGER(__name__).info(f"Finished Processing: {post_url}")
 
         elif chat_message.text:
+            if batch_stats:
+                batch_stats["processed"] += 1
+                try:
+                    await progress_msg.edit(get_progress_text("Text Message", batch_stats))
+                except Exception:
+                    pass
             await message.reply(
                 chat_message.text.html, 
                 parse_mode=ParseMode.HTML, 
@@ -298,6 +335,8 @@ async def handle_download(bot: Client, message: Message, post_url: str, pre_fetc
             )
             LOGGER(__name__).info(f"Finished Processing: {post_url}")
         else:
+            if batch_stats:
+                batch_stats["processed"] += 1
             await message.reply("**No downloadable media or text found in the post URL.**")
 
     except (PeerIdInvalid, BadRequest, KeyError):
@@ -359,7 +398,7 @@ async def download_range(bot: Client, message: Message):
         pass
 
     prefix = args[1].rsplit("/", 1)[0]
-    loading = await message.reply(f"📥 **Downloading posts {start_id}–{end_id}…**")
+    loading = await message.reply(f"📥 **Started Batch Processing...**")
 
     downloaded = skipped = failed = 0
     batch_tasks = []
@@ -368,6 +407,9 @@ async def download_range(bot: Client, message: Message):
     
     all_ids = list(range(start_id, end_id + 1))
     chunk_size = 200
+    
+    total_links = len(all_ids)
+    batch_stats = {"total": total_links, "processed": 0}
 
     for i in range(0, len(all_ids), chunk_size):
         chunk_ids = all_ids[i:i + chunk_size]
@@ -379,11 +421,13 @@ async def download_range(bot: Client, message: Message):
         except Exception as e:
             LOGGER(__name__).error(f"Error fetching chunk: {e}")
             failed += len(chunk_ids)
+            batch_stats["processed"] += len(chunk_ids)
             continue
             
         for chat_msg in messages:
             if not chat_msg or chat_msg.empty:
                 skipped += 1
+                batch_stats["processed"] += 1
                 continue
             
             msg_id = chat_msg.id
@@ -392,6 +436,7 @@ async def download_range(bot: Client, message: Message):
             if chat_msg.media_group_id:
                 if chat_msg.media_group_id in processed_media_groups:
                     skipped += 1
+                    batch_stats["processed"] += 1
                     continue
                 processed_media_groups.add(chat_msg.media_group_id)
 
@@ -399,23 +444,34 @@ async def download_range(bot: Client, message: Message):
             has_text  = bool(chat_msg.text or chat_msg.caption)
             if not (has_media or has_text):
                 skipped += 1
+                batch_stats["processed"] += 1
                 continue
                 
             if filter_type != "all":
                 if filter_type == "video" and not chat_msg.video:
                     skipped += 1
+                    batch_stats["processed"] += 1
                     continue
                 elif filter_type == "doc" and not chat_msg.document:
                     skipped += 1
+                    batch_stats["processed"] += 1
                     continue
                 elif filter_type == "audio" and not chat_msg.audio:
                     skipped += 1
+                    batch_stats["processed"] += 1
                     continue
                 elif filter_type == "photo" and not chat_msg.photo:
                     skipped += 1
+                    batch_stats["processed"] += 1
                     continue
 
-            task = track_task(handle_download(bot, message, url, pre_fetched_msg=chat_msg, fetch_time=chunk_fetch_time))
+            task = track_task(handle_download(
+                bot, message, url, 
+                pre_fetched_msg=chat_msg, 
+                fetch_time=chunk_fetch_time,
+                progress_msg=loading,
+                batch_stats=batch_stats
+            ))
             batch_tasks.append(task)
             
             if len(batch_tasks) >= BATCH_SIZE:

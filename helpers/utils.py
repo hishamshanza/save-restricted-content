@@ -26,51 +26,28 @@ from helpers.msg import (
 )
 from logger import LOGGER
 
-async def custom_progress(current, total, action, progress_message, start_time, file_name, state_dict):
-    if total == 0:
-        return
+def get_progress_text(filename, batch_stats=None, warning=""):
+    if not batch_stats:
+        text = f"**📥 Processing:** {filename}"
+        if warning:
+            text += f"\n\n{warning}"
+        return text
 
-    current_time = time()
+    current = batch_stats["processed"]
+    total = batch_stats["total"]
+    rem = total - current
+    pct = (current / total) * 100 if total > 0 else 100
     
-    if (current_time - state_dict.get('last_update', 0)) < 10 and current != total:
-        return
-        
-    state_dict['last_update'] = current_time
-
-    percentage = (current / total) * 100
-    
-    elapsed_time = current_time - start_time
-    speed = current / elapsed_time if elapsed_time > 0 else 0
-    eta = (total - current) / speed if speed > 0 else 0
-
-    def format_bytes(size):
-        if not size: return "0B"
-        for unit in ["B", "KB", "MB", "GB"]:
-            if size < 1024: return f"{size:.2f} {unit}"
-            size /= 1024
-        return "File too large"
-        
-    def format_time(seconds):
-        m, s = divmod(int(seconds), 60)
-        h, m = divmod(m, 60)
-        if h: return f"{h}h {m}m {s}s"
-        elif m: return f"{m}m {s}s"
-        return f"{s}s"
-
-    clean_filename = file_name.replace(".", ".\u200b") if file_name else "Unknown"
-
     text = (
-        f"{action}\n"
-        f"File: {clean_filename}\n\n"
-        f"Percentage: {percentage:.2f}% | {format_bytes(current)}/{format_bytes(total)}\n"
-        f"Speed: {format_bytes(speed)}/s\n"
-        f"Estimated Time Left: {format_time(eta)}"
+        f"🚀 Batch Progress: {pct:.1f}%\n\n"
+        f"├ 📊 Total Links: {total}\n"
+        f"├ ⚡ Currently On: {current}\n"
+        f"├ ⏳ Remaining Links: {rem}\n\n"
+        f"📥 Processing: {filename}"
     )
-    
-    try:
-        await progress_message.edit_text(text)
-    except Exception:
-        pass
+    if warning:
+        text += f"\n\n{warning}"
+    return text
 
 async def cmd_exec(cmd, shell=False):
     if shell:
@@ -168,7 +145,7 @@ async def get_video_thumbnail(video_file, duration):
     return output
 
 async def send_media(
-    bot, message, media_path, media_type, caption, progress_message, start_time
+    bot, message, media_path, media_type, caption, progress_msg=None, batch_stats=None
 ):
     try:
         file_size = os.path.getsize(media_path)
@@ -178,25 +155,15 @@ async def send_media(
 
     if not await fileSizeLimit(file_size, message, "upload"):
         return False
-
+        
     filename = os.path.basename(media_path)
-    
-    try:
-        await progress_message.edit(f"**📤 Uploading:** {filename}")
-    except Exception:
-        pass
-
-    state_dict = {'last_update': 0}
-    prog_args = ("📤 Uploading", progress_message, start_time, filename, state_dict)
 
     async def _send_once():
         if media_type == "photo":
             await bot.send_photo(
                 chat_id=message.chat.id,
                 photo=media_path,
-                caption=caption or "",
-                progress=custom_progress,
-                progress_args=prog_args,
+                caption=caption or ""
             )
         elif media_type == "video":
             duration, _, _, width, height = await get_media_info(media_path)
@@ -211,9 +178,7 @@ async def send_media(
                 height=height,
                 thumb=thumb,
                 caption=caption or "",
-                supports_streaming=True,
-                progress=custom_progress,
-                progress_args=prog_args,
+                supports_streaming=True
             )
         elif media_type == "audio":
             duration, artist, title, _, _ = await get_media_info(media_path)
@@ -223,17 +188,13 @@ async def send_media(
                 duration=duration,
                 performer=artist,
                 title=title,
-                caption=caption or "",
-                progress=custom_progress,
-                progress_args=prog_args,
+                caption=caption or ""
             )
         elif media_type == "document":
             await bot.send_document(
                 chat_id=message.chat.id,
                 document=media_path,
-                caption=caption or "",
-                progress=custom_progress,
-                progress_args=prog_args,
+                caption=caption or ""
             )
 
     max_retries = 3
@@ -247,19 +208,21 @@ async def send_media(
             wait_s = int(getattr(e, "value", 0) or 0)
             wait_msg = get_readable_time(wait_s)
             LOGGER(__name__).warning(f"FloodWait: Sleeping {wait_msg}")
-            try:
-                await progress_message.edit(f"⏳ **Telegram is throttling...**\nSleeping for `{wait_msg}`.")
-            except:
-                pass
+            if progress_msg:
+                try:
+                    await progress_msg.edit(get_progress_text(filename, batch_stats, f"⏳ **Rate Limited:** Pausing for {wait_msg}..."))
+                except Exception:
+                    pass
             await asyncio.sleep(wait_s + 1)
             continue
             
         except (Timeout, TimeoutError):
             LOGGER(__name__).warning(f"TimeoutError: Request timed out. Retrying ({retry_count}/{max_retries})")
-            try:
-                await progress_message.edit(f"⚠️ **Network Timeout.**\nRetrying `{retry_count}/{max_retries}`...")
-            except:
-                pass
+            if progress_msg:
+                try:
+                    await progress_msg.edit(get_progress_text(filename, batch_stats, f"⚠️ **Network Issue:** Retrying {retry_count}/{max_retries}..."))
+                except Exception:
+                    pass
             await asyncio.sleep(5)
             retry_count += 1
             continue
@@ -267,32 +230,26 @@ async def send_media(
         except Exception as e:
             LOGGER(__name__).error(f"Upload failed: {e} (Attempt {retry_count}/{max_retries})")
             if retry_count < max_retries:
-                try:
-                    await progress_message.edit(f"⚠️ **Upload Error.**\nRetrying `{retry_count}/{max_retries-1}` in 3s...")
-                except:
-                    pass
+                if progress_msg:
+                    try:
+                        await progress_msg.edit(get_progress_text(filename, batch_stats, f"⚠️ **Network Issue:** Retrying {retry_count}/{max_retries}..."))
+                    except Exception:
+                        pass
                 await asyncio.sleep(3)
                 retry_count += 1
                 continue
             else:
-                try:
-                    await progress_message.edit(f"❌ **Upload Failed.**\nMax retries reached. Error: {str(e)}")
-                except:
-                    pass
                 return False
     
     return False
 
-async def download_single_media(msg, progress_message, start_time, semaphore, fetch_time=None):
+async def download_single_media(msg, semaphore, fetch_time=None, progress_msg=None, batch_stats=None):
     filename = get_file_name(msg.id, msg)
     
     download_path = get_download_path(msg.id, filename)
     
     max_retries = 3
     retry_count = 1
-
-    state_dict = {'last_update': 0}
-    prog_args = ("📥 Downloading", progress_message, start_time, filename, state_dict)
 
     while retry_count <= max_retries:
         try:
@@ -307,9 +264,7 @@ async def download_single_media(msg, progress_message, start_time, semaphore, fe
                         pass
 
                 media_path = await msg.download(
-                    file_name=download_path,
-                    progress=custom_progress,
-                    progress_args=prog_args,
+                    file_name=download_path
                 )
 
             parsed_caption = await get_parsed_msg(
@@ -329,10 +284,11 @@ async def download_single_media(msg, progress_message, start_time, semaphore, fe
             wait_s = int(getattr(e, "value", 0) or 0)
             wait_msg = get_readable_time(wait_s)
             LOGGER(__name__).warning(f"FloodWait downloading: Sleeping {wait_msg}")
-            try:
-                await progress_message.edit(f"⏳ **FloodWait:** Sleeping `{wait_msg}`...")
-            except:
-                pass
+            if progress_msg:
+                try:
+                    await progress_msg.edit(get_progress_text(filename, batch_stats, f"⏳ **Rate Limited:** Pausing for {wait_msg}..."))
+                except Exception:
+                    pass
             await asyncio.sleep(wait_s + 1)
             continue
         except Exception as e:
@@ -345,15 +301,13 @@ async def download_single_media(msg, progress_message, start_time, semaphore, fe
 
     return ("skip", None, None)
 
-async def processMediaGroup(chat_message, bot, message, semaphore):
+async def processMediaGroup(chat_message, bot, message, semaphore, progress_msg=None, batch_stats=None):
     media_group_messages = await chat_message.get_media_group()
     valid_media = []
     temp_paths = []
     invalid_paths = []
 
-    start_time = time()
     group_fetch_time = time()
-    progress_message = await message.reply("📥 Downloading media group...")
     LOGGER(__name__).info(
         f"Downloading media group with {len(media_group_messages)} items..."
     )
@@ -361,7 +315,7 @@ async def processMediaGroup(chat_message, bot, message, semaphore):
     download_tasks = []
     for msg in media_group_messages:
         if msg.photo or msg.video or msg.document or msg.audio:
-            download_tasks.append(download_single_media(msg, progress_message, start_time, semaphore, group_fetch_time))
+            download_tasks.append(download_single_media(msg, semaphore, group_fetch_time, progress_msg, batch_stats))
 
     results = await asyncio.gather(*download_tasks, return_exceptions=True)
 
@@ -387,17 +341,17 @@ async def processMediaGroup(chat_message, bot, message, semaphore):
         while retry_count <= max_retries:
             try:
                 await bot.send_media_group(chat_id=message.chat.id, media=valid_media)
-                await progress_message.delete()
                 sent_success = True
                 break
             except FloodWait as e:
                 wait_s = int(getattr(e, "value", 0) or 0)
                 wait_msg = get_readable_time(wait_s)
                 LOGGER(__name__).warning(f"FloodWait sending group: Sleeping {wait_msg}")
-                try:
-                    await progress_message.edit(f"⏳ **FloodWait:** Sleeping `{wait_msg}` before sending album...")
-                except:
-                    pass
+                if progress_msg:
+                    try:
+                        await progress_msg.edit(get_progress_text("Media Group", batch_stats, f"⏳ **Rate Limited:** Pausing for {wait_msg}..."))
+                    except Exception:
+                        pass
                 await asyncio.sleep(wait_s + 1)
                 continue
             except Exception as e:
@@ -425,14 +379,10 @@ async def processMediaGroup(chat_message, bot, message, semaphore):
                 except Exception as e:
                     await message.reply(f"Failed to upload individual media: {e}")
 
-            await progress_message.delete()
-
         for path in temp_paths + invalid_paths:
             cleanup_download(path)
         return True
 
-    await progress_message.delete()
-    await message.reply("❌ No valid media found in the media group.")
     for path in invalid_paths:
         cleanup_download(path)
     return False

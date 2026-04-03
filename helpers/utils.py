@@ -165,8 +165,11 @@ async def get_video_thumbnail(video_file, duration):
     return output
 
 async def send_media(
-    bot, message, media_path, media_type, caption, progress_msg=None, batch_stats=None
+    bot, message, media_path, media_type, caption, progress_msg=None, batch_stats=None, target_chat_id=None
 ):
+    if target_chat_id is None:
+        target_chat_id = message.chat.id
+        
     try:
         file_size = os.path.getsize(media_path)
     except OSError as e:
@@ -182,7 +185,7 @@ async def send_media(
     async def _send_once():
         if media_type == "photo":
             await bot.send_photo(
-                chat_id=message.chat.id,
+                chat_id=target_chat_id,
                 photo=media_path,
                 caption=caption or ""
             )
@@ -192,7 +195,7 @@ async def send_media(
             if not width or not height: width, height = 640, 480
             thumb = await get_video_thumbnail(media_path, duration)
             await bot.send_video(
-                chat_id=message.chat.id,
+                chat_id=target_chat_id,
                 video=media_path,
                 duration=duration,
                 width=width,
@@ -204,7 +207,7 @@ async def send_media(
         elif media_type == "audio":
             duration, artist, title, _, _ = await get_media_info(media_path)
             await bot.send_audio(
-                chat_id=message.chat.id,
+                chat_id=target_chat_id,
                 audio=media_path,
                 duration=duration,
                 performer=artist,
@@ -213,7 +216,7 @@ async def send_media(
             )
         elif media_type == "document":
             await bot.send_document(
-                chat_id=message.chat.id,
+                chat_id=target_chat_id,
                 document=media_path,
                 caption=caption or ""
             )
@@ -326,7 +329,10 @@ async def download_single_media(msg, semaphore, fetch_time=None, progress_msg=No
 
     return ("skip", None, None)
 
-async def processMediaGroup(chat_message, bot, message, semaphore, progress_msg=None, batch_stats=None):
+async def processMediaGroup(chat_message, bot, message, semaphore, progress_msg=None, batch_stats=None, target_chat_id=None):
+    if target_chat_id is None:
+        target_chat_id = message.chat.id
+        
     media_group_messages = await chat_message.get_media_group()
     valid_media = []
     temp_paths = []
@@ -365,7 +371,7 @@ async def processMediaGroup(chat_message, bot, message, semaphore, progress_msg=
 
         while retry_count <= max_retries:
             try:
-                await bot.send_media_group(chat_id=message.chat.id, media=valid_media)
+                await bot.send_media_group(chat_id=target_chat_id, media=valid_media)
                 sent_success = True
                 break
             except FloodWait as e:
@@ -394,13 +400,13 @@ async def processMediaGroup(chat_message, bot, message, semaphore, progress_msg=
             for media in valid_media:
                 try:
                     if isinstance(media, InputMediaPhoto):
-                        await bot.send_photo(chat_id=message.chat.id, photo=media.media, caption=media.caption)
+                        await bot.send_photo(chat_id=target_chat_id, photo=media.media, caption=media.caption)
                     elif isinstance(media, InputMediaVideo):
-                        await bot.send_video(chat_id=message.chat.id, video=media.media, caption=media.caption)
+                        await bot.send_video(chat_id=target_chat_id, video=media.media, caption=media.caption)
                     elif isinstance(media, InputMediaDocument):
-                        await bot.send_document(chat_id=message.chat.id, document=media.media, caption=media.caption)
+                        await bot.send_document(chat_id=target_chat_id, document=media.media, caption=media.caption)
                     elif isinstance(media, InputMediaAudio):
-                        await bot.send_audio(chat_id=message.chat.id, audio=media.media, caption=media.caption)
+                        await bot.send_audio(chat_id=target_chat_id, audio=media.media, caption=media.caption)
                 except Exception as e:
                     await message.reply(f"Failed to upload individual media: {e}")
 

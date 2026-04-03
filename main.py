@@ -8,7 +8,7 @@ from time import time
 from pyrogram.enums import ParseMode
 from pyrogram import Client, compose, filters
 from pyrogram.errors import PeerIdInvalid, BadRequest, FloodWait, FileReferenceExpired
-from pyrogram.types import Message
+from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 
 from helpers.utils import (
     processMediaGroup,
@@ -55,6 +55,8 @@ user = Client(
 RUNNING_TASKS = set()
 download_semaphore = None
 upload_semaphore = None
+BATCH_JOBS = {}
+WAITING_FOR_CHANNEL = {}
 
 def format_size(size_bytes):
     if size_bytes == 0:
@@ -84,37 +86,36 @@ def track_task(coro):
 @bot.on_message(filters.command("start") & filters.private)
 async def start(_, message: Message):
     welcome_text = (
-        "🤖 **Welcome to Save Restricted Content Bot!**\n\n"
+        "> 🤖 Welcome to Save Restricted Content Bot!\n\n" 
         "I can grab photos, videos, audio, and documents from any Telegram post.\n"
         "Just send me a link (paste it directly or use `/dl <link>`),\n\n"
         "ℹ️ Use `/help` to view all commands and examples.\n"
         "🔒 Make sure the user client is part of the chat.\n\n"
-        "Ready? Send me a Telegram post link!"
+        "> Ready? Send me a Telegram post link!"
     )
     await message.reply(welcome_text, disable_web_page_preview=True)
 
 @bot.on_message(filters.command("help") & filters.private)
 async def help_command(_, message: Message):
     help_text = (
-        "💡 **Save Restricted Content Bot Help:**\n\n"
-        "➤ **Single Download**\n"
-        "   – Send `/dl <post_URL>` **or** just paste a Telegram post link to fetch photos, videos, audio, or documents.\n\n"
-        "➤ **Batch Download**\n"
-        "   – Send `/batch start_link end_link [filter]` to grab a series of posts in one go.\n"
-        "   – Filters available: video, doc, photo, audio (leave empty for all).\n\n"
-        "  💡Example: `/batch https://t.me/mychannel/100 https://t.me/mychannel/120 video`\n"
-        "➤ **Requirements**\n"
-        "   – Make sure the user client is part of the chat.\n\n"
-        "➤ **If the bot hangs**\n"
-        "   – Send `/stop` to cancel any pending downloads.\n\n"
-        "➤ **Logs**\n"
-        "   – Send `/logs` to download the bot’s log file.\n\n"
-        "➤ **Stats**\n"
-        "   – Send `/stats` to view current status.\n\n"
+        "**💡Bot Help & Commands**\n\n"
+        "**Single Posts**\n"
+        "> Paste any Telegram link or use `/dl <link>`.\n\n"
+        "**Batch Mode**\n"
+        "> `/batch <start_url> <end_url> [filter]`\n"
+        ">  Filters: video, doc, photo, audio\n"
+        "> Example: `/batch .../10 .../20 video`\n\n"
+        "**Controls**\n"
+        "> `/stop` | `/stats` | `/logs`\n\n"
+        "**Requirements**\n"
+        "> 🔒 User session must be in the chat."
     )
     await message.reply(help_text, disable_web_page_preview=True)
 
-async def handle_download(bot: Client, message: Message, post_url: str, pre_fetched_msg: Message = None, fetch_time: float = None, progress_msg: Message = None, batch_stats: dict = None):
+async def handle_download(bot: Client, message: Message, post_url: str, pre_fetched_msg: Message = None, fetch_time: float = None, progress_msg: Message = None, batch_stats: dict = None, target_chat_id: int | str = None):
+    if target_chat_id is None:
+        target_chat_id = message.chat.id
+        
     task_start_time = time()
     if "?" in post_url:
         post_url = post_url.split("?", 1)[0]
@@ -168,7 +169,7 @@ async def handle_download(bot: Client, message: Message, post_url: str, pre_fetc
             elif not progress_msg:
                 progress_msg = await message.reply(get_progress_text("Media Group", "Multiple Files"))
 
-            if not await processMediaGroup(chat_message, bot, message, dl_sem, progress_msg, batch_stats):
+            if not await processMediaGroup(chat_message, bot, message, dl_sem, progress_msg, batch_stats, target_chat_id):
                 if progress_msg:
                     try:
                         await progress_msg.edit("❌ **Failed to process Media Group**")
@@ -312,7 +313,8 @@ async def handle_download(bot: Client, message: Message, post_url: str, pre_fetc
                     media_type,
                     parsed_caption,
                     progress_msg,
-                    batch_stats
+                    batch_stats,
+                    target_chat_id
                 )
 
             if upload_success:
@@ -330,8 +332,9 @@ async def handle_download(bot: Client, message: Message, post_url: str, pre_fetc
                     await progress_msg.edit(get_progress_text("Text Message", "N/A", batch_stats))
                 except Exception:
                     pass
-            await message.reply(
-                chat_message.text.html, 
+            await bot.send_message(
+                chat_id=target_chat_id,
+                text=chat_message.text.html, 
                 parse_mode=ParseMode.HTML, 
                 disable_web_page_preview=True
             )
@@ -361,27 +364,17 @@ async def handle_download(bot: Client, message: Message, post_url: str, pre_fetc
         if elapsed < 2.0:
             await asyncio.sleep(2.0 - elapsed)
 
-@bot.on_message(filters.command("dl") & filters.private)
-async def download_media(bot: Client, message: Message):
-    if len(message.command) < 2:
-        await message.reply("**Provide a post URL after the /dl command.**")
-        return
-
-    post_url = message.command[1]
-    await track_task(handle_download(bot, message, post_url))
-
 @bot.on_message(filters.command("batch") & filters.private)
 async def download_range(bot: Client, message: Message):
     args = message.text.split()
 
     if len(args) < 3 or not all(arg.startswith("https://t.me/") for arg in args[1:3]):
         await message.reply(
-            "🚀 **Batch Download**\n"
-            "`/batch start_link end_link [filter]`\n\n"
-            "💡 **Examples:**\n"
-            "`/batch https://t.me/mychannel/100 https://t.me/mychannel/120` (Left blank for All)\n\n"
-            "`/batch https://t.me/mychannel/100 https://t.me/mychannel/120 video` (Only Videos)\n\n"
-            "`/batch https://t.me/mychannel/100 https://t.me/mychannel/120 doc` (Only Documents)"
+            "🚀**Batch Download**\n"
+            "> `/batch start_link end_link [filter]`\n\n"
+            "💡**Examples:**\n"
+            "> `/batch https://t.me/mychannel/100 https://t.me/mychannel/120` (Leave blank for All)\n"
+            "> `/batch https://t.me/mychannel/100 https://t.me/mychannel/120 video` (Only Videos)\n\n"
         )
         return
 
@@ -398,13 +391,63 @@ async def download_range(bot: Client, message: Message):
     if start_id > end_id:
         return await message.reply("**❌ Invalid range: start ID cannot exceed end ID.**")
 
+    prefix = args[1].rsplit("/", 1)[0]
+    
+    BATCH_JOBS[message.id] = {
+        "start_chat": start_chat,
+        "start_id": start_id,
+        "end_id": end_id,
+        "filter_type": filter_type,
+        "prefix": prefix,
+        "original_message": message
+    }
+
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("Bot Chat", callback_data=f"batch_bot_{message.id}"),
+            InlineKeyboardButton("Channel", callback_data=f"batch_chan_{message.id}")
+        ]
+    ])
+    
+    await message.reply(
+        "**Where do you want to forward the media?**",
+        reply_markup=keyboard
+    )
+
+@bot.on_callback_query(filters.regex(r"^batch_(bot|chan)_(\d+)$"))
+async def batch_destination_callback(bot: Client, callback_query: CallbackQuery):
+    action = callback_query.matches[0].group(1)
+    msg_id = int(callback_query.matches[0].group(2))
+
+    if msg_id not in BATCH_JOBS:
+        return await callback_query.answer("Batch process has expired or is invalid.", show_alert=True)
+
+    job = BATCH_JOBS.pop(msg_id)
+    await callback_query.message.delete()
+
+    if action == "bot":
+        target_chat_id = callback_query.message.chat.id
+        await track_task(execute_batch(bot, job["original_message"], job, target_chat_id))
+    elif action == "chan":
+        WAITING_FOR_CHANNEL[callback_query.from_user.id] = job
+        await job["original_message"].reply(
+            "**Please send me a post link from your target channel.**\n\n"
+            "> ⚠️Make me a channel Admin with 'Post Messages' rights first!"
+        )
+
+async def execute_batch(bot: Client, original_msg: Message, job: dict, target_chat_id: int | str):
+    start_chat = job["start_chat"]
+    start_id = job["start_id"]
+    end_id = job["end_id"]
+    filter_type = job["filter_type"]
+    prefix = job["prefix"]
+
     try:
         await user.get_chat(start_chat)
     except Exception:
         pass
 
-    prefix = args[1].rsplit("/", 1)[0]
-    loading = await message.reply(f"📥 **Started Batch Processing...**")
+    loading = await original_msg.reply(f"📥 **Started Batch Processing...**")
     try:
         await loading.pin(disable_notification=True, both_sides=True)
     except Exception:
@@ -476,11 +519,12 @@ async def download_range(bot: Client, message: Message):
                     continue
 
             task = track_task(handle_download(
-                bot, message, url, 
+                bot, original_msg, url, 
                 pre_fetched_msg=chat_msg, 
                 fetch_time=chunk_fetch_time,
                 progress_msg=loading,
-                batch_stats=batch_stats
+                batch_stats=batch_stats,
+                target_chat_id=target_chat_id
             ))
             batch_tasks.append(task)
             
@@ -493,7 +537,7 @@ async def download_range(bot: Client, message: Message):
                         except Exception:
                             pass
                         await loading.delete()
-                        return await message.reply(
+                        return await original_msg.reply(
                             f"**❌ Batch canceled** after downloading `{downloaded}` posts."
                         )
                     elif isinstance(result, Exception):
@@ -518,18 +562,38 @@ async def download_range(bot: Client, message: Message):
     except Exception:
         pass
     await loading.delete()
-    await message.reply(
-        "**✅ Batch Process Completed!**\n"
+    await original_msg.reply(
+        "> ✅Batch Process Completed!\n"
         "━━━━━━━━━━━━━━━━━━━\n"
         f"📥 **Downloaded** : {downloaded} post(s)\n"
         f"⏭️ **Skipped** : {skipped} (no content or filtered)\n"
         f"❌ **Failed** : {failed} error(s)"
     )
 
-@bot.on_message(filters.private & ~filters.command(["start", "help", "dl", "stats", "logs", "stop"]))
+@bot.on_message(filters.private & filters.text & ~filters.command(["start", "help", "dl", "stats", "logs", "stop"]))
 async def handle_any_message(bot: Client, message: Message):
-    if message.text and re.search(r"t\.me\/", message.text):
+    user_id = message.from_user.id
+
+    if user_id in WAITING_FOR_CHANNEL:
+        job = WAITING_FOR_CHANNEL.pop(user_id)
+        try:
+            target_chat_id, _ = getChatMsgID(message.text)
+            await track_task(execute_batch(bot, job["original_message"], job, target_chat_id))
+        except Exception as e:
+            await message.reply(f"**❌ Error parsing target link:\n{e}**")
+        return
+
+    if re.search(r"t\.me\/", message.text):
         await track_task(handle_download(bot, message, message.text))
+
+@bot.on_message(filters.command("dl") & filters.private)
+async def download_media(bot: Client, message: Message):
+    if len(message.command) < 2:
+        await message.reply("**Provide a post URL after the /dl command.**")
+        return
+
+    post_url = message.command[1]
+    await track_task(handle_download(bot, message, post_url))
 
 @bot.on_message(filters.command("stats") & filters.private)
 async def stats(_, message: Message):

@@ -58,15 +58,6 @@ upload_semaphore = None
 BATCH_JOBS = {}
 WAITING_FOR_CHANNEL = {}
 
-def format_size(size_bytes):
-    if size_bytes == 0:
-        return "0B"
-    size_name = ("B", "KB", "MB", "GB")
-    i = int(math.floor(math.log(size_bytes, 1024)))
-    p = math.pow(1024, i)
-    s = round(size_bytes / p, 2)
-    return f"{s} {size_name[i]}"
-
 def get_semaphores():
     global download_semaphore, upload_semaphore
     if download_semaphore is None:
@@ -195,7 +186,7 @@ async def handle_download(bot: Client, message: Message, post_url: str, pre_fetc
                 chat_message.video_note or chat_message.sticker
             )
             pre_file_size = getattr(media_obj, "file_size", 0) if media_obj else 0
-            file_size_str = format_size(pre_file_size)
+            file_size_str = get_readable_file_size(pre_file_size)
             
             LOGGER(__name__).info(f"Downloading media: {filename} (Size: {file_size_str})")
 
@@ -464,6 +455,11 @@ async def execute_batch(bot: Client, original_msg: Message, job: dict, target_ch
     total_links = len(all_ids)
     batch_stats = {"total": total_links, "processed": 0}
 
+    rapid_file_count = 0
+    rapid_window_start = time()
+    RAPID_LIMIT = 10
+    RAPID_WINDOW_DURATION = 120
+
     for i in range(0, len(all_ids), chunk_size):
         chunk_ids = all_ids[i:i + chunk_size]
         try:
@@ -545,6 +541,21 @@ async def execute_batch(bot: Client, original_msg: Message, job: dict, target_ch
                         LOGGER(__name__).error(f"Error: {result}")
                     else:
                         downloaded += 1
+                        rapid_file_count += 1
+
+                if rapid_file_count >= RAPID_LIMIT:
+                    elapsed = time() - rapid_window_start
+                    if elapsed < RAPID_WINDOW_DURATION:
+                        sleep_duration = RAPID_WINDOW_DURATION - elapsed
+                        LOGGER(__name__).warning(f"Speed Limit: Sleeping for {sleep_duration:.1f}s to avoid floodwait.")
+                        try:
+                            await loading.edit(f"📥 **Batch Processing...**\n> 🕘 Pausing for {int(sleep_duration)}s to avoid floodwait.")
+                        except Exception:
+                            pass
+                        await asyncio.sleep(sleep_duration)
+                    
+                    rapid_file_count = 0
+                    rapid_window_start = time()
 
                 batch_tasks.clear()
                 await asyncio.sleep(PyroConf.FLOOD_WAIT_DELAY)

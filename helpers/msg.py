@@ -14,7 +14,7 @@ def clean_caption(caption: str) -> str:
     def defang_link(match):
         prefix = match.group(1)
         rest = match.group(2)
-        return f"{prefix}[REMOVE]{rest}"
+        return f"`{prefix}[REMOVE]{rest}`"
 
     pattern = r'(https?://|www\.|t\.me/|telegram\.me/|chat\.whatsapp\.com/|@)(\w\S*)'
     caption = re.sub(pattern, defang_link, caption, flags=re.IGNORECASE)
